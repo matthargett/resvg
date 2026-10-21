@@ -178,6 +178,8 @@ pub struct Span {
 struct GlyphCluster {
     byte_idx: ByteIndex,
     codepoint: char,
+    /// The position of the cluster's first code point in the chunk text.
+    code_point: usize,
     width: f32,
     advance: f32,
     text_length_spacing: f32,
@@ -548,7 +550,6 @@ fn clusters_length(clusters: &[GlyphCluster]) -> f32 {
 
 fn resolve_relative_shifts(
     text: &Text,
-    chunk: &TextChunk,
     offset: usize,
     clusters: &[GlyphCluster],
 ) -> (Vec<(f32, f32)>, Vec<usize>) {
@@ -560,7 +561,7 @@ fn resolve_relative_shifts(
     let mut shifts = vec![(0.0, 0.0); clusters.len()];
     let (mut shift_x, mut shift_y) = (0.0, 0.0);
     for &i in &logical_order {
-        let cp = offset + clusters[i].byte_idx.code_point_at(&chunk.text);
+        let cp = offset + clusters[i].code_point;
         shift_x += text.dx.get(cp).cloned().unwrap_or(0.0);
         shift_y += text.dy.get(cp).cloned().unwrap_or(0.0);
         shifts[i] = (shift_x, shift_y);
@@ -576,7 +577,7 @@ fn resolve_clusters_positions_horizontal(
     writing_mode: WritingMode,
     clusters: &mut [GlyphCluster],
 ) -> (f32, f32) {
-    let (mut shifts, logical_order) = resolve_relative_shifts(text, chunk, offset, clusters);
+    let (mut shifts, logical_order) = resolve_relative_shifts(text, offset, clusters);
     let first = logical_order[0];
     let last = logical_order[logical_order.len() - 1];
 
@@ -607,7 +608,7 @@ fn resolve_clusters_positions_horizontal(
     let mut x = shifts[first].0 - left + process_anchor(chunk.anchor, right - left);
 
     for (cluster, (shift_x, shift_y)) in clusters.iter_mut().zip(&shifts) {
-        let cp = offset + cluster.byte_idx.code_point_at(&chunk.text);
+        let cp = offset + cluster.code_point;
 
         cluster.transform = cluster.transform.pre_translate(x + shift_x, *shift_y);
 
@@ -679,7 +680,7 @@ fn resolve_clusters_positions_path(
     let mut last_x = 0.0;
     let mut last_y = 0.0;
 
-    let (shifts, _) = resolve_relative_shifts(text, chunk, char_offset, clusters);
+    let (shifts, _) = resolve_relative_shifts(text, char_offset, clusters);
 
     // In the text path mode, chunk's x/y coordinates provide an additional offset along the path.
     // The X coordinate is used in a horizontal mode, and Y in vertical.
@@ -713,7 +714,7 @@ fn resolve_clusters_positions_path(
         cluster.transform = cluster.transform.pre_translate(x - half_width, y);
         cluster.transform = cluster.transform.pre_rotate_at(angle, half_width, 0.0);
 
-        let cp = char_offset + cluster.byte_idx.code_point_at(&chunk.text);
+        let cp = char_offset + cluster.code_point;
 
         let baseline_shift = chunk_span_at(chunk, cluster.byte_idx)
             .map(|span| {
@@ -1001,6 +1002,12 @@ fn process_chunk(
         }
     }
 
+    // The position of each character in the chunk text, by its byte index.
+    let mut code_points = vec![0u32; chunk.text.len() + 1];
+    for (i, (byte, _)) in chunk.text.char_indices().enumerate() {
+        code_points[byte] = i as u32;
+    }
+
     // Convert glyphs to clusters.
     let mut clusters = Vec::new();
     for (range, byte_idx) in GlyphClusters::new(&glyphs) {
@@ -1008,6 +1015,7 @@ fn process_chunk(
             clusters.push(form_glyph_clusters(
                 &glyphs[range],
                 &chunk.text,
+                code_points[byte_idx.value()] as usize,
                 span.font_size.get(),
             ));
         }
@@ -1180,7 +1188,12 @@ fn apply_word_spacing(chunk: &TextChunk, clusters: &mut [GlyphCluster]) {
     }
 }
 
-fn form_glyph_clusters(glyphs: &[Glyph], text: &str, font_size: f32) -> GlyphCluster {
+fn form_glyph_clusters(
+    glyphs: &[Glyph],
+    text: &str,
+    code_point: usize,
+    font_size: f32,
+) -> GlyphCluster {
     debug_assert!(!glyphs.is_empty());
 
     let mut x = 0.0;
@@ -1227,6 +1240,7 @@ fn form_glyph_clusters(glyphs: &[Glyph], text: &str, font_size: f32) -> GlyphClu
     GlyphCluster {
         byte_idx,
         codepoint: byte_idx.char_from(text),
+        code_point,
         width,
         advance,
         text_length_spacing: 0.0,
@@ -1865,13 +1879,6 @@ impl ByteIndex {
 
     pub(crate) fn value(&self) -> usize {
         self.0
-    }
-
-    /// Converts byte position into a code point position.
-    pub(crate) fn code_point_at(&self, text: &str) -> usize {
-        text.char_indices()
-            .take_while(|(i, _)| *i != self.0)
-            .count()
     }
 
     /// Converts byte position into a character.
