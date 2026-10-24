@@ -59,25 +59,32 @@ fn render_group(
         return Some(());
     }
 
-    let rest = if group.filters().is_empty() {
-        tiny_skia::Transform::identity()
-    } else {
+    let mut rest = tiny_skia::Transform::identity();
+    let mut layer_ts = transform;
+    if !group.filters().is_empty() {
         let sx = transform.sx.hypot(transform.ky);
         let sy = transform.kx.hypot(transform.sy);
-        tiny_skia::Transform::from_row(
+        rest = tiny_skia::Transform::from_row(
             transform.sx / sx,
             transform.ky / sx,
             transform.kx / sy,
             transform.sy / sy,
             0.0,
             0.0,
-        )
-    };
+        );
+        if rest.has_skew() {
+            // A rotated or skewed layer takes the translation along and is scaled exactly,
+            // so that its pixels stay aligned with the group's user space, as in browsers.
+            rest = rest.post_translate(transform.tx, transform.ty);
+            layer_ts = tiny_skia::Transform::from_scale(sx, sy);
+        } else {
+            layer_ts = rest.invert()?.pre_concat(transform);
+        }
+    }
     let inv_rest = rest.invert()?;
 
     let max_bbox = ctx.max_bbox.to_rect().transform(inv_rest)?.round_out()?;
-    let (layer, ibbox) =
-        render_layer(group, &Context { max_bbox }, inv_rest.pre_concat(transform))?;
+    let (layer, ibbox) = render_layer(group, &Context { max_bbox }, layer_ts)?;
 
     let paint = tiny_skia::Paint {
         shader: tiny_skia::Pattern::new(
@@ -117,12 +124,7 @@ fn render_layer(
     } else {
         // The bounding box for groups with filters is special and should not be expanded by 2px,
         // because it's already acting as a clipping region.
-        let bbox = tiny_skia::IntRect::from_xywh(
-            bbox.x().floor() as i32,
-            bbox.y().floor() as i32,
-            bbox.width().ceil().max(1.0) as u32,
-            bbox.height().ceil().max(1.0) as u32,
-        )?;
+        let bbox = crate::geom::to_int_rect(bbox)?;
         // Make sure our filter region is not bigger than 4x the canvas size.
         // This is required mainly to prevent huge filter regions that would tank the performance.
         // It should not affect the final result in any way.
