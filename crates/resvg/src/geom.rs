@@ -1,6 +1,18 @@
 // Copyright 2023 the Resvg Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+/// Converts a filter region into pixels, rounding its edges outwards, but taking an edge within
+/// a thousandth of a pixel of an integer as that integer, as Skia's image filters do, so that
+/// the float error of a transform does not add a row or a column of pixels.
+pub fn to_int_rect(r: tiny_skia::NonZeroRect) -> Option<tiny_skia::IntRect> {
+    const EPSILON: f32 = 1e-3;
+    let left = (r.left() + EPSILON).floor();
+    let top = (r.top() + EPSILON).floor();
+    let right = (r.right() - EPSILON).ceil().max(left + 1.0);
+    let bottom = (r.bottom() - EPSILON).ceil().max(top + 1.0);
+    tiny_skia::IntRect::from_ltrb(left as i32, top as i32, right as i32, bottom as i32)
+}
+
 /// Fits the current rect into the specified bounds.
 pub fn fit_to_rect(
     r: tiny_skia::IntRect,
