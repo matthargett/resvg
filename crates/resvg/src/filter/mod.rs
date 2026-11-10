@@ -362,7 +362,7 @@ fn apply_inner(
     let region = filter
         .rect()
         .transform(ts)
-        .map(|r| r.to_int_rect())
+        .and_then(crate::geom::to_int_rect)
         .ok_or(Error::InvalidRegion)?;
 
     // The source pixmap is clamped to `max_bbox` in `render_group`, so the filter
@@ -389,7 +389,7 @@ fn apply_inner(
         let mut subregion = primitive
             .rect()
             .transform(ts)
-            .map(|r| r.to_int_rect())
+            .and_then(crate::geom::to_int_rect)
             .ok_or(Error::InvalidRegion)?;
 
         // `feOffset` inherits its region from the input.
@@ -976,7 +976,10 @@ fn apply_displacement_map(
     input2: Image,
 ) -> Result<Image, Error> {
     let pixmap1 = input1.into_color_space(cs)?.take()?;
-    let pixmap2 = input2.into_color_space(cs)?.take()?;
+    let mut pixmap2 = input2.into_color_space(cs)?.take()?;
+
+    // The displacement map must be read using non-premultiplied color values.
+    demultiply_alpha(pixmap2.data_mut().as_rgba_mut());
 
     let mut pixmap = tiny_skia::Pixmap::try_create(region.width(), region.height())?;
 
